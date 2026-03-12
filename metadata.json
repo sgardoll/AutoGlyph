@@ -1,0 +1,5 @@
+{
+  "name": "Alphabet to Font",
+  "description": "Upload an image of the alphabet, use AI to detect letters, and generate a custom TrueType Font (.ttf) file.",
+  "requestFramePermissions": []
+}
