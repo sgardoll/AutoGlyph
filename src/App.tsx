@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Type, Download, Loader2, Settings, Trash2 } from 'lucide-react';
-import { LetterBox, generateFont } from './utils/fontGenerator';
-import { detectLetters } from './utils/gemini';
+import { Upload, Type, Download, Loader2, Settings, Trash2, Plus } from 'lucide-react';
+import { LetterBox, FontMetrics, createFont, downloadFont } from './utils/fontGenerator';
+import { detectLetters, suggestKerning, KerningPair } from './utils/gemini';
 import { DEMO_ALPHABET_URL, DEMO_LETTERS } from './demoAlphabet';
+
+import ImageCanvas from './components/ImageCanvas';
 
 export default function App() {
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -12,8 +14,18 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDarkText, setIsDarkText] = useState(true);
   const [fontName, setFontName] = useState('My Custom Font');
-  
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [metrics, setMetrics] = useState<FontMetrics>({
+    ascender: 800,
+    descender: -200,
+    xHeight: 500,
+    capHeight: 700
+  });
+  const [kerningPairs, setKerningPairs] = useState<KerningPair[]>([]);
+  const [isSuggestingKerning, setIsSuggestingKerning] = useState(false);
+  const [previewText, setPreviewText] = useState('The quick brown fox jumps over the lazy dog');
+  const [previewSvg, setPreviewSvg] = useState<string>('');
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [gridSize, setGridSize] = useState(10);
 
   const loadImageFromSource = (src: string, nextFile?: File | null) => {
     setImageFile(nextFile ?? null);
@@ -30,8 +42,17 @@ export default function App() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    setImageFile(file);
+    setLetters([]);
+    setSelectedLetterId(null);
+
     const url = URL.createObjectURL(file);
-    loadImageFromSource(url, file);
+    const img = new Image();
+    img.onload = () => {
+      setImageElement(img);
+    };
+    img.src = url;
   };
 
   const handleLoadDemo = async () => {
@@ -46,89 +67,85 @@ export default function App() {
   const handleDetect = async () => {
     if (!imageFile) return;
     setIsProcessing(true);
-    try {
-      const reader = new FileReader();
-      reader.onloadend = async () => {
+
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
         const base64 = reader.result as string;
         const detected = await detectLetters(base64, imageFile.type);
         setLetters(detected);
+      } catch (error: any) {
+        console.error('Error detecting letters:', error);
+        if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota')) {
+          alert('You have exceeded your Gemini API quota. Please check your plan and billing details, or try again later.');
+        } else {
+          alert('Failed to detect letters. Please try again.');
+        }
+      } finally {
         setIsProcessing(false);
-      };
-      reader.readAsDataURL(imageFile);
-    } catch (error) {
-      console.error('Error detecting letters:', error);
-      alert('Failed to detect letters. Please try again.');
-      setIsProcessing(false);
-    }
+      }
+    };
+    reader.readAsDataURL(imageFile);
   };
 
-  const handleGenerate = () => {
+  const handleDownload = (format: 'otf' | 'ttf' | 'woff') => {
     if (!imageElement || letters.length === 0) return;
     try {
-      generateFont(imageElement, letters, isDarkText, fontName);
+      const font = createFont(imageElement, letters, isDarkText, fontName, metrics, kerningPairs);
+      downloadFont(font, kerningPairs, format);
     } catch (error) {
       console.error('Error generating font:', error);
       alert('Failed to generate font. Check console for details.');
     }
   };
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !imageElement) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  const handleSuggestKerning = async () => {
+    if (!imageFile || letters.length === 0) return;
+    setIsSuggestingKerning(true);
 
-    canvas.width = imageElement.width;
-    canvas.height = imageElement.height;
-
-    ctx.drawImage(imageElement, 0, 0);
-
-    letters.forEach(letter => {
-      const [ymin, xmin, ymax, xmax] = letter.box;
-      const x = (xmin / 1000) * canvas.width;
-      const y = (ymin / 1000) * canvas.height;
-      const w = ((xmax - xmin) / 1000) * canvas.width;
-      const h = ((ymax - ymin) / 1000) * canvas.height;
-
-      const isSelected = selectedLetterId === letter.id;
-      
-      ctx.strokeStyle = isSelected ? '#ef4444' : '#3b82f6';
-      ctx.lineWidth = isSelected ? 4 : 2;
-      ctx.strokeRect(x, y, w, h);
-      
-      ctx.fillStyle = isSelected ? '#ef4444' : '#3b82f6';
-      ctx.fillRect(x, y - 24, 24, 24);
-      
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 16px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(letter.char, x + 12, y - 12);
-    });
-  }, [imageElement, letters, selectedLetterId]);
-
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!canvasRef.current || !imageElement) return;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const scaleX = canvasRef.current.width / rect.width;
-    const scaleY = canvasRef.current.height / rect.height;
-    
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
-
-    // Find clicked box (reverse order to pick top-most if overlapping)
-    const clicked = [...letters].reverse().find(letter => {
-      const [ymin, xmin, ymax, xmax] = letter.box;
-      const bx = (xmin / 1000) * canvasRef.current!.width;
-      const by = (ymin / 1000) * canvasRef.current!.height;
-      const bw = ((xmax - xmin) / 1000) * canvasRef.current!.width;
-      const bh = ((ymax - ymin) / 1000) * canvasRef.current!.height;
-      
-      return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
-    });
-
-    setSelectedLetterId(clicked ? clicked.id : null);
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
+        const base64 = reader.result as string;
+        const detectedChars = Array.from(new Set<string>(letters.map(l => l.char)));
+        const suggestions = await suggestKerning(base64, imageFile.type, detectedChars);
+        setKerningPairs(suggestions);
+      } catch (error: any) {
+        console.error('Error suggesting kerning:', error);
+        if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota')) {
+          alert('You have exceeded your Gemini API quota. Please check your plan and billing details, or try again later.');
+        } else {
+          alert('Failed to suggest kerning pairs. Please try again.');
+        }
+      } finally {
+        setIsSuggestingKerning(false);
+      }
+    };
+    reader.readAsDataURL(imageFile);
   };
+
+  useEffect(() => {
+    if (!imageElement || letters.length === 0 || !previewText) {
+      setPreviewSvg('');
+      return;
+    }
+
+    try {
+      const font = createFont(imageElement, letters, isDarkText, fontName, metrics, kerningPairs);
+      const fontSize = 72;
+      const baselineY = metrics.ascender * (fontSize / 1000);
+      const path = font.getPath(previewText, 0, baselineY, fontSize);
+      const width = Math.max(1, font.getAdvanceWidth(previewText, fontSize));
+      const height = Math.max(1, (metrics.ascender - metrics.descender) * (fontSize / 1000));
+
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+        ${path.toSVG(2).replace('<path', '<path fill="currentColor"')}
+      </svg>`;
+      setPreviewSvg(svg);
+    } catch (err) {
+      console.error("Failed to generate preview", err);
+    }
+  }, [imageElement, letters, isDarkText, fontName, metrics, kerningPairs, previewText]);
 
   const updateSelectedChar = (char: string) => {
     if (!selectedLetterId) return;
@@ -143,17 +160,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 font-sans">
-      <header className="bg-white border-b border-neutral-200 px-6 py-4 sticky top-0 z-10">
+      <header className="bg-white border-b border-neutral-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <div className="bg-indigo-600 p-2 rounded-lg">
             <Type className="w-6 h-6 text-white" />
           </div>
           <h1 className="text-xl font-semibold tracking-tight">AutoGlyph</h1>
         </div>
+        <div className="flex items-center gap-4">
+          <a href="https://github.com/opentypejs/opentype.js" target="_blank" rel="noreferrer" className="text-sm text-neutral-500 hover:text-neutral-900">Powered by opentype.js</a>
+        </div>
       </header>
 
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
+
         {/* Left Column: Image & Canvas */}
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
@@ -189,10 +209,14 @@ export default function App() {
 
             {imageElement ? (
               <div className="relative border border-neutral-200 rounded-lg overflow-hidden bg-neutral-100">
-                <canvas
-                  ref={canvasRef}
-                  onClick={handleCanvasClick}
-                  className="w-full h-auto cursor-crosshair block"
+                <ImageCanvas
+                  imageElement={imageElement}
+                  letters={letters}
+                  setLetters={setLetters}
+                  selectedLetterId={selectedLetterId}
+                  setSelectedLetterId={setSelectedLetterId}
+                  snapToGrid={snapToGrid}
+                  gridSize={gridSize}
                 />
                 {letters.length === 0 && !isProcessing && (
                   <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm">
@@ -227,7 +251,7 @@ export default function App() {
                 </button>
               </div>
             )}
-            
+
             {imageElement && letters.length > 0 && (
               <p className="text-xs text-neutral-500 mt-3 flex items-center gap-1">
                 <Settings className="w-3 h-3" />
@@ -235,11 +259,32 @@ export default function App() {
               </p>
             )}
           </div>
+
+          {/* Real-time Preview */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
+            <h2 className="text-lg font-medium mb-4">Real-time Preview</h2>
+            <input
+              type="text"
+              value={previewText}
+              onChange={(e) => setPreviewText(e.target.value)}
+              className="w-full border border-neutral-300 rounded-lg px-3 py-2 mb-4 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+              placeholder="Type to preview..."
+            />
+            <div className="border border-neutral-200 rounded-lg p-4 bg-neutral-50 overflow-x-auto min-h-[120px] flex items-center">
+              {previewSvg ? (
+                <div dangerouslySetInnerHTML={{ __html: previewSvg }} className="text-neutral-900" />
+              ) : (
+                <p className="text-sm text-neutral-400 text-center w-full">
+                  {letters.length > 0 ? (previewText ? 'Generating preview...' : 'Type text to preview') : 'Detect letters to see preview'}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Right Column: Settings & Export */}
         <div className="space-y-6">
-          
+
           {/* Edit Selected Letter */}
           {selectedLetterId && (
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-indigo-200 ring-1 ring-indigo-50">
@@ -267,9 +312,44 @@ export default function App() {
             </div>
           )}
 
+          {/* Canvas Settings */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
+            <h2 className="text-lg font-medium mb-4">Canvas Settings</h2>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-3 bg-neutral-50 rounded-lg border border-neutral-200">
+                <div>
+                  <p className="text-sm font-medium text-neutral-900">Snap to Grid</p>
+                  <p className="text-xs text-neutral-500">Align boxes precisely</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={snapToGrid}
+                    onChange={(e) => setSnapToGrid(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                </label>
+              </div>
+
+              {snapToGrid && (
+                <div>
+                  <label className="block text-xs font-medium text-neutral-700 mb-1">Grid Size (px)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={gridSize}
+                    onChange={(e) => setGridSize(Math.max(1, parseInt(e.target.value) || 10))}
+                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
             <h2 className="text-lg font-medium mb-4">2. Font Settings</h2>
-            
+
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-neutral-700 mb-1">Font Name</label>
@@ -297,6 +377,45 @@ export default function App() {
                 </label>
               </div>
 
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-neutral-700 mb-1">Ascender</label>
+                  <input
+                    type="number"
+                    value={metrics.ascender}
+                    onChange={(e) => setMetrics({ ...metrics, ascender: parseInt(e.target.value) || 0 })}
+                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-neutral-700 mb-1">Descender</label>
+                  <input
+                    type="number"
+                    value={metrics.descender}
+                    onChange={(e) => setMetrics({ ...metrics, descender: parseInt(e.target.value) || 0 })}
+                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-neutral-700 mb-1">Cap Height</label>
+                  <input
+                    type="number"
+                    value={metrics.capHeight}
+                    onChange={(e) => setMetrics({ ...metrics, capHeight: parseInt(e.target.value) || 0 })}
+                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-neutral-700 mb-1">x-Height</label>
+                  <input
+                    type="number"
+                    value={metrics.xHeight}
+                    onChange={(e) => setMetrics({ ...metrics, xHeight: parseInt(e.target.value) || 0 })}
+                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+              </div>
+
               <div className="pt-4 border-t border-neutral-100">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-neutral-700">Detected Letters</span>
@@ -311,8 +430,8 @@ export default function App() {
                         key={l.id}
                         onClick={() => setSelectedLetterId(l.id)}
                         className={`w-8 h-8 flex items-center justify-center rounded text-sm font-medium transition-colors ${
-                          selectedLetterId === l.id 
-                            ? 'bg-red-100 text-red-700 border border-red-200' 
+                          selectedLetterId === l.id
+                            ? 'bg-red-100 text-red-700 border border-red-200'
                             : 'bg-white text-neutral-700 border border-neutral-200 hover:border-indigo-300 hover:text-indigo-600'
                         }`}
                       >
@@ -328,17 +447,93 @@ export default function App() {
           </div>
 
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-            <h2 className="text-lg font-medium mb-4">3. Export</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-medium">3. Kerning Pairs</h2>
+              <button
+                onClick={handleSuggestKerning}
+                disabled={letters.length === 0 || isSuggestingKerning}
+                className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                {isSuggestingKerning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Settings className="w-4 h-4" />}
+                Auto-Suggest
+              </button>
+            </div>
+
+            {kerningPairs.length > 0 ? (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
+                {kerningPairs.map((pair, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <div className="flex-1 flex items-center justify-center gap-1 bg-neutral-100 rounded-lg py-1">
+                      <span className="font-medium text-lg">{pair.left}</span>
+                      <span className="text-neutral-400">-</span>
+                      <span className="font-medium text-lg">{pair.right}</span>
+                    </div>
+                    <input
+                      type="number"
+                      value={pair.value}
+                      onChange={(e) => {
+                        const newPairs = [...kerningPairs];
+                        newPairs[idx].value = parseInt(e.target.value) || 0;
+                        setKerningPairs(newPairs);
+                      }}
+                      className="w-20 border border-neutral-300 rounded-lg px-2 py-1.5 text-sm text-center focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    <button
+                      onClick={() => setKerningPairs(kerningPairs.filter((_, i) => i !== idx))}
+                      className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-neutral-500 text-center py-4">
+                No kerning pairs defined. Click Auto-Suggest to use AI to find problematic pairs.
+              </p>
+            )}
+
             <button
-              onClick={handleGenerate}
-              disabled={letters.length === 0}
-              className="w-full py-3 bg-black hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white rounded-xl font-medium shadow-sm transition-colors flex items-center justify-center gap-2"
+              onClick={() => setKerningPairs([...kerningPairs, { left: 'A', right: 'V', value: -50 }])}
+              className="mt-4 w-full py-2 border border-dashed border-neutral-300 text-neutral-600 hover:bg-neutral-50 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
             >
-              <Download className="w-5 h-5" />
-              Download .otf
+              <Plus className="w-4 h-4" />
+              Add Manual Pair
             </button>
-            <p className="text-xs text-neutral-500 text-center mt-3">
-              Generates an OpenType font file using the detected letters and calculated metrics.
+          </div>
+
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
+            <h2 className="text-lg font-medium mb-4">4. Export</h2>
+            <div className="space-y-3">
+              <button
+                onClick={() => handleDownload('otf')}
+                disabled={letters.length === 0}
+                className="w-full py-3 bg-black hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white rounded-xl font-medium shadow-sm transition-colors flex items-center justify-center gap-2"
+              >
+                <Download className="w-5 h-5" />
+                Download .otf
+              </button>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => handleDownload('ttf')}
+                  disabled={letters.length === 0}
+                  className="w-full py-2 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-50 disabled:text-neutral-400 disabled:cursor-not-allowed text-neutral-800 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 text-sm"
+                >
+                  <Download className="w-4 h-4" />
+                  .ttf
+                </button>
+                <button
+                  onClick={() => handleDownload('woff')}
+                  disabled={letters.length === 0}
+                  className="w-full py-2 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-50 disabled:text-neutral-400 disabled:cursor-not-allowed text-neutral-800 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 text-sm"
+                >
+                  <Download className="w-4 h-4" />
+                  .woff
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-neutral-500 text-center mt-4">
+              Generates font files with embedded kerning tables for maximum compatibility.
             </p>
           </div>
 
