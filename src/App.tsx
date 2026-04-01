@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Type, Download, Loader2, Settings, Trash2 } from 'lucide-react';
 import { LetterBox, generateFont } from './utils/fontGenerator';
 import { detectLetters } from './utils/gemini';
+import { DEMO_ALPHABET_URL, DEMO_LETTERS } from './demoAlphabet';
 
 export default function App() {
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -14,20 +15,32 @@ export default function App() {
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setImageFile(file);
+  const loadImageFromSource = (src: string, nextFile?: File | null) => {
+    setImageFile(nextFile ?? null);
     setLetters([]);
     setSelectedLetterId(null);
 
-    const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
       setImageElement(img);
     };
-    img.src = url;
+    img.src = src;
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    loadImageFromSource(url, file);
+  };
+
+  const handleLoadDemo = async () => {
+    const response = await fetch(DEMO_ALPHABET_URL);
+    const blob = await response.blob();
+    const demoFile = new File([blob], 'demo-alphabet.svg', { type: blob.type || 'image/svg+xml' });
+
+    loadImageFromSource(DEMO_ALPHABET_URL, demoFile);
+    setLetters(DEMO_LETTERS.map(letter => ({ ...letter })));
   };
 
   const handleDetect = async () => {
@@ -130,15 +143,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 font-sans">
-      <header className="bg-white border-b border-neutral-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
+      <header className="bg-white border-b border-neutral-200 px-6 py-4 sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <div className="bg-indigo-600 p-2 rounded-lg">
             <Type className="w-6 h-6 text-white" />
           </div>
-          <h1 className="text-xl font-semibold tracking-tight">Alphabet to Font</h1>
-        </div>
-        <div className="flex items-center gap-4">
-          <a href="https://github.com/opentypejs/opentype.js" target="_blank" rel="noreferrer" className="text-sm text-neutral-500 hover:text-neutral-900">Powered by opentype.js</a>
+          <h1 className="text-xl font-semibold tracking-tight">AutoGlyph</h1>
         </div>
       </header>
 
@@ -150,20 +160,30 @@ export default function App() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-medium">1. Upload Alphabet Image</h2>
               <div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageUpload}
-                  className="hidden"
-                  id="image-upload"
-                />
-                <label
-                  htmlFor="image-upload"
-                  className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-lg text-sm font-medium transition-colors"
-                >
-                  <Upload className="w-4 h-4" />
-                  Choose Image
-                </label>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleLoadDemo}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Type className="w-4 h-4" />
+                    Load Demo
+                  </button>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                    className="hidden"
+                    id="image-upload"
+                  />
+                  <label
+                    htmlFor="image-upload"
+                    className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Choose Image
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -197,6 +217,14 @@ export default function App() {
                 <Upload className="w-10 h-10 text-neutral-400 mb-4" />
                 <p className="text-neutral-600 font-medium mb-1">No image selected</p>
                 <p className="text-neutral-500 text-sm">Upload an image containing handwritten or printed letters.</p>
+                <button
+                  type="button"
+                  onClick={handleLoadDemo}
+                  className="mt-5 inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Type className="w-4 h-4" />
+                  Try the built-in demo
+                </button>
               </div>
             )}
             
@@ -307,10 +335,10 @@ export default function App() {
               className="w-full py-3 bg-black hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white rounded-xl font-medium shadow-sm transition-colors flex items-center justify-center gap-2"
             >
               <Download className="w-5 h-5" />
-              Download .ttf
+              Download .otf
             </button>
             <p className="text-xs text-neutral-500 text-center mt-3">
-              Generates a TrueType Font file using the detected letters and calculated metrics.
+              Generates an OpenType font file using the detected letters and calculated metrics.
             </p>
           </div>
 
@@ -319,4 +347,3 @@ export default function App() {
     </div>
   );
 }
-
