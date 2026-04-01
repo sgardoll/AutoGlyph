@@ -3,7 +3,7 @@ import { LetterBox } from './fontGenerator';
 
 export const detectLetters = async (base64Image: string, mimeType: string): Promise<LetterBox[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  
+
   const response = await ai.models.generateContent({
     model: 'gemini-3.1-pro-preview',
     contents: [
@@ -62,7 +62,7 @@ Ensure you find as many characters as possible, and that their bounding boxes ar
   }
 
   const result = JSON.parse(response.text);
-  
+
   return result.letters.map((l: any, i: number) => ({
     id: `letter-${i}-${Date.now()}`,
     char: l.char,
@@ -78,7 +78,7 @@ export type KerningPair = {
 
 export const suggestKerning = async (base64Image: string, mimeType: string, detectedChars: string[]): Promise<KerningPair[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  
+
   const response = await ai.models.generateContent({
     model: 'gemini-3.1-pro-preview',
     contents: [
@@ -126,4 +126,3 @@ Return a JSON object with a 'kerning' array.`
   const result = JSON.parse(response.text);
   return result.kerning || [];
 };
-

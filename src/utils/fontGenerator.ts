@@ -17,27 +17,27 @@ export type FontMetrics = {
 function getCharMetrics(char: string, metrics: FontMetrics) {
   // Numerals
   if (/[0-9]/.test(char)) return { align: 'bottom', targetY: 0, targetH: metrics.capHeight };
-  
+
   // Uppercase
   if (/[A-Z]/.test(char)) {
     if (char === 'Q') return { align: 'top', targetY: metrics.capHeight, targetH: metrics.capHeight - metrics.descender };
     return { align: 'bottom', targetY: 0, targetH: metrics.capHeight };
   }
-  
+
   // Lowercase with descenders
   if (/[gpqy]/.test(char)) return { align: 'top', targetY: metrics.xHeight, targetH: metrics.xHeight - metrics.descender };
   if (char === 'j') return { align: 'top', targetY: metrics.ascender, targetH: metrics.ascender - metrics.descender };
-  
+
   // Lowercase with ascenders
   if (/[bdfhklt]/.test(char)) return { align: 'bottom', targetY: 0, targetH: metrics.ascender };
-  
+
   // Lowercase x-height
   if (/[aceimnorsuvwxz]/.test(char)) return { align: 'bottom', targetY: 0, targetH: metrics.xHeight };
-  
+
   // Punctuation
   if (/[.,]/.test(char)) return { align: 'bottom', targetY: 0, targetH: metrics.xHeight * 0.2 };
   if (/[!?'"]/.test(char)) return { align: 'top', targetY: metrics.capHeight, targetH: metrics.capHeight };
-  
+
   // fallback
   return { align: 'bottom', targetY: 0, targetH: metrics.xHeight };
 }
@@ -58,7 +58,7 @@ function createGlyphPath(imageData: ImageData, char: string, isDarkText: boolean
   const { width, height, data } = imageData;
   const values = new Array(width * height).fill(0);
   let minX = width, maxX = 0, minY = height, maxY = 0;
-  
+
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
@@ -67,9 +67,9 @@ function createGlyphPath(imageData: ImageData, char: string, isDarkText: boolean
       const b = data[i+2];
       const a = data[i+3];
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-      
+
       const isInk = isDarkText ? (lum < 150 && a > 128) : (lum > 128 && a > 128);
-      
+
       if (isInk) {
         values[y * width + x] = 1;
         if (x < minX) minX = x;
@@ -89,7 +89,7 @@ function createGlyphPath(imageData: ImageData, char: string, isDarkText: boolean
 
   const charMetrics = getCharMetrics(char, metrics);
   const scale = charMetrics.targetH / inkHeight;
-  
+
   let fontTop, fontBottom;
   if (charMetrics.align === 'bottom') {
     fontBottom = charMetrics.targetY;
@@ -101,9 +101,9 @@ function createGlyphPath(imageData: ImageData, char: string, isDarkText: boolean
 
   const leftSideBearing = 50;
   const path = new opentype.Path();
-  
+
   const multiPolygons = contours().size([width, height]).thresholds([0.5])(values);
-  
+
   multiPolygons.forEach(multiPolygon => {
     multiPolygon.coordinates.forEach(polygon => {
       polygon.forEach((ring, ringIndex) => {
@@ -280,7 +280,7 @@ function createKernTable(pairs: { left: string, right: string, value: number }[]
 function injectTable(originalBuffer: ArrayBuffer, tag: string, tableData: Uint8Array) {
   const originalView = new DataView(originalBuffer);
   const numTables = originalView.getUint16(4);
-  
+
   const tables = [];
   for (let i = 0; i < numTables; i++) {
     const offset = 12 + i * 16;
@@ -335,7 +335,7 @@ function injectTable(originalBuffer: ArrayBuffer, tag: string, tableData: Uint8A
 
   newBytes.set(originalBytes.subarray(0, 12));
   newView.setUint16(4, tables.length);
-  
+
   const searchRange = Math.pow(2, Math.floor(Math.log2(tables.length))) * 16;
   const entrySelector = Math.floor(Math.log2(tables.length));
   const rangeShift = tables.length * 16 - searchRange;
@@ -349,18 +349,18 @@ function injectTable(originalBuffer: ArrayBuffer, tag: string, tableData: Uint8A
     newView.setUint8(dirOffset + 1, table.tag.charCodeAt(1));
     newView.setUint8(dirOffset + 2, table.tag.charCodeAt(2));
     newView.setUint8(dirOffset + 3, table.tag.charCodeAt(3));
-    
+
     newView.setUint32(dirOffset + 4, table.checkSum);
     newView.setUint32(dirOffset + 8, (table as any).newOffset);
     newView.setUint32(dirOffset + 12, table.length);
-    
+
     if ((table as any).data) {
       newBytes.set((table as any).data, (table as any).newOffset);
     } else {
       const oldPaddedLength = (table.length + 3) & ~3;
       newBytes.set(originalBytes.subarray(table.offset, table.offset + oldPaddedLength), (table as any).newOffset);
     }
-    
+
     dirOffset += 16;
   }
 
@@ -381,12 +381,12 @@ function injectTable(originalBuffer: ArrayBuffer, tag: string, tableData: Uint8A
 function wrapInWoff(sfntBuffer: ArrayBuffer): ArrayBuffer {
   const sfntView = new DataView(sfntBuffer);
   const numTables = sfntView.getUint16(4);
-  
+
   const woffHeaderSize = 44;
   const woffDirSize = numTables * 20;
-  
+
   let totalWoffSize = woffHeaderSize + woffDirSize;
-  
+
   const tables = [];
   for (let i = 0; i < numTables; i++) {
     const offset = 12 + i * 16;
@@ -394,21 +394,21 @@ function wrapInWoff(sfntBuffer: ArrayBuffer): ArrayBuffer {
     const checkSum = sfntView.getUint32(offset + 4);
     const tableOffset = sfntView.getUint32(offset + 8);
     const length = sfntView.getUint32(offset + 12);
-    
+
     const paddedLength = (length + 3) & ~3;
-    
+
     tables.push({
       tag, checkSum, offset: tableOffset, length, paddedLength
     });
-    
+
     totalWoffSize += paddedLength;
   }
-  
+
   const woffBuffer = new ArrayBuffer(totalWoffSize);
   const woffView = new DataView(woffBuffer);
   const woffBytes = new Uint8Array(woffBuffer);
   const sfntBytes = new Uint8Array(sfntBuffer);
-  
+
   woffView.setUint32(0, 0x774F4646); // 'wOFF'
   woffView.setUint32(4, sfntView.getUint32(0)); // flavor
   woffView.setUint32(8, totalWoffSize);
@@ -422,23 +422,23 @@ function wrapInWoff(sfntBuffer: ArrayBuffer): ArrayBuffer {
   woffView.setUint32(32, 0);
   woffView.setUint32(36, 0);
   woffView.setUint32(40, 0);
-  
+
   let dirOffset = 44;
   let dataOffset = woffHeaderSize + woffDirSize;
-  
+
   for (const table of tables) {
     woffView.setUint32(dirOffset, table.tag);
     woffView.setUint32(dirOffset + 4, dataOffset);
     woffView.setUint32(dirOffset + 8, table.length);
     woffView.setUint32(dirOffset + 12, table.length);
     woffView.setUint32(dirOffset + 16, table.checkSum);
-    
+
     woffBytes.set(sfntBytes.subarray(table.offset, table.offset + table.length), dataOffset);
-    
+
     dirOffset += 20;
     dataOffset += table.paddedLength;
   }
-  
+
   return woffBuffer;
 }
 
@@ -448,7 +448,7 @@ export function downloadFont(
   format: 'otf' | 'ttf' | 'woff'
 ) {
   let buffer = font.toArrayBuffer();
-  
+
   // Inject kern table if we have kerning pairs
   const kernData = createKernTable(kerningPairs, font);
   if (kernData) {
@@ -464,11 +464,11 @@ export function downloadFont(
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  
+
   const familyName = font.names.fontFamily.en.replace(/\s/g, '');
   const styleName = font.names.fontSubfamily.en;
   link.download = `${familyName}-${styleName}.${format}`;
-  
+
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

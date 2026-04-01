@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Type, Download, Loader2, Settings, Trash2, Plus } from 'lucide-react';
 import { LetterBox, FontMetrics, createFont, downloadFont } from './utils/fontGenerator';
 import { detectLetters, suggestKerning, KerningPair } from './utils/gemini';
+import { DEMO_ALPHABET_URL, DEMO_LETTERS } from './demoAlphabet';
 
 import ImageCanvas from './components/ImageCanvas';
 
@@ -26,6 +27,18 @@ export default function App() {
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [gridSize, setGridSize] = useState(10);
 
+  const loadImageFromSource = (src: string, nextFile?: File | null) => {
+    setImageFile(nextFile ?? null);
+    setLetters([]);
+    setSelectedLetterId(null);
+
+    const img = new Image();
+    img.onload = () => {
+      setImageElement(img);
+    };
+    img.src = src;
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -42,10 +55,19 @@ export default function App() {
     img.src = url;
   };
 
+  const handleLoadDemo = async () => {
+    const response = await fetch(DEMO_ALPHABET_URL);
+    const blob = await response.blob();
+    const demoFile = new File([blob], 'demo-alphabet.svg', { type: blob.type || 'image/svg+xml' });
+
+    loadImageFromSource(DEMO_ALPHABET_URL, demoFile);
+    setLetters(DEMO_LETTERS.map(letter => ({ ...letter })));
+  };
+
   const handleDetect = async () => {
     if (!imageFile) return;
     setIsProcessing(true);
-    
+
     const reader = new FileReader();
     reader.onloadend = async () => {
       try {
@@ -80,7 +102,7 @@ export default function App() {
   const handleSuggestKerning = async () => {
     if (!imageFile || letters.length === 0) return;
     setIsSuggestingKerning(true);
-    
+
     const reader = new FileReader();
     reader.onloadend = async () => {
       try {
@@ -115,7 +137,7 @@ export default function App() {
       const path = font.getPath(previewText, 0, baselineY, fontSize);
       const width = Math.max(1, font.getAdvanceWidth(previewText, fontSize));
       const height = Math.max(1, (metrics.ascender - metrics.descender) * (fontSize / 1000));
-      
+
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
         ${path.toSVG(2).replace('<path', '<path fill="currentColor"')}
       </svg>`;
@@ -143,7 +165,7 @@ export default function App() {
           <div className="bg-indigo-600 p-2 rounded-lg">
             <Type className="w-6 h-6 text-white" />
           </div>
-          <h1 className="text-xl font-semibold tracking-tight">Alphabet to Font</h1>
+          <h1 className="text-xl font-semibold tracking-tight">AutoGlyph</h1>
         </div>
         <div className="flex items-center gap-4">
           <a href="https://github.com/opentypejs/opentype.js" target="_blank" rel="noreferrer" className="text-sm text-neutral-500 hover:text-neutral-900">Powered by opentype.js</a>
@@ -151,27 +173,37 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
+
         {/* Left Column: Image & Canvas */}
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-medium">1. Upload Alphabet Image</h2>
               <div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleImageUpload}
-                  className="hidden"
-                  id="image-upload"
-                />
-                <label
-                  htmlFor="image-upload"
-                  className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-lg text-sm font-medium transition-colors"
-                >
-                  <Upload className="w-4 h-4" />
-                  Choose Image
-                </label>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleLoadDemo}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Type className="w-4 h-4" />
+                    Load Demo
+                  </button>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                    className="hidden"
+                    id="image-upload"
+                  />
+                  <label
+                    htmlFor="image-upload"
+                    className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Upload className="w-4 h-4" />
+                    Choose Image
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -209,9 +241,17 @@ export default function App() {
                 <Upload className="w-10 h-10 text-neutral-400 mb-4" />
                 <p className="text-neutral-600 font-medium mb-1">No image selected</p>
                 <p className="text-neutral-500 text-sm">Upload an image containing handwritten or printed letters.</p>
+                <button
+                  type="button"
+                  onClick={handleLoadDemo}
+                  className="mt-5 inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Type className="w-4 h-4" />
+                  Try the built-in demo
+                </button>
               </div>
             )}
-            
+
             {imageElement && letters.length > 0 && (
               <p className="text-xs text-neutral-500 mt-3 flex items-center gap-1">
                 <Settings className="w-3 h-3" />
@@ -244,7 +284,7 @@ export default function App() {
 
         {/* Right Column: Settings & Export */}
         <div className="space-y-6">
-          
+
           {/* Edit Selected Letter */}
           {selectedLetterId && (
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-indigo-200 ring-1 ring-indigo-50">
@@ -291,7 +331,7 @@ export default function App() {
                   <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
                 </label>
               </div>
-              
+
               {snapToGrid && (
                 <div>
                   <label className="block text-xs font-medium text-neutral-700 mb-1">Grid Size (px)</label>
@@ -309,7 +349,7 @@ export default function App() {
 
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
             <h2 className="text-lg font-medium mb-4">2. Font Settings</h2>
-            
+
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-neutral-700 mb-1">Font Name</label>
@@ -390,8 +430,8 @@ export default function App() {
                         key={l.id}
                         onClick={() => setSelectedLetterId(l.id)}
                         className={`w-8 h-8 flex items-center justify-center rounded text-sm font-medium transition-colors ${
-                          selectedLetterId === l.id 
-                            ? 'bg-red-100 text-red-700 border border-red-200' 
+                          selectedLetterId === l.id
+                            ? 'bg-red-100 text-red-700 border border-red-200'
                             : 'bg-white text-neutral-700 border border-neutral-200 hover:border-indigo-300 hover:text-indigo-600'
                         }`}
                       >
@@ -418,7 +458,7 @@ export default function App() {
                 Auto-Suggest
               </button>
             </div>
-            
+
             {kerningPairs.length > 0 ? (
               <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
                 {kerningPairs.map((pair, idx) => (
@@ -452,7 +492,7 @@ export default function App() {
                 No kerning pairs defined. Click Auto-Suggest to use AI to find problematic pairs.
               </p>
             )}
-            
+
             <button
               onClick={() => setKerningPairs([...kerningPairs, { left: 'A', right: 'V', value: -50 }])}
               className="mt-4 w-full py-2 border border-dashed border-neutral-300 text-neutral-600 hover:bg-neutral-50 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
@@ -502,4 +542,3 @@ export default function App() {
     </div>
   );
 }
-

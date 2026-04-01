@@ -58,10 +58,10 @@ export default function ImageCanvas({
           const [ymin, xmin, ymax, xmax] = letter.box;
           const boxCenterX = ((xmin + xmax) / 2000) * imageElement.width;
           const boxCenterY = ((ymin + ymax) / 2000) * imageElement.height;
-          
+
           const newZoom = 3;
           setZoomScale(newZoom);
-          
+
           setPan({
             x: dimensions.width / 2 - boxCenterX * scale * newZoom,
             y: dimensions.height / 2 - boxCenterY * scale * newZoom
@@ -84,19 +84,19 @@ export default function ImageCanvas({
     const clickedOnEmpty = e.target === e.target.getStage() || e.target.name() === 'backgroundImage';
     if (clickedOnEmpty) {
       setSelectedLetterId(null);
-      
+
       // Start drawing new box
       const stage = e.target.getStage();
       const pos = getPointerPos(stage);
-      
+
       let startX = pos.x / scale;
       let startY = pos.y / scale;
-      
+
       if (snapToGrid && gridSize) {
         startX = Math.round(startX / gridSize) * gridSize;
         startY = Math.round(startY / gridSize) * gridSize;
       }
-      
+
       setIsDrawing(true);
       setNewBox({
         x: startX,
@@ -109,17 +109,17 @@ export default function ImageCanvas({
 
   const handleMouseMove = (e: any) => {
     if (!isDrawing || !newBox) return;
-    
+
     const stage = e.target.getStage();
     const pos = getPointerPos(stage);
     let currentX = pos.x / scale;
     let currentY = pos.y / scale;
-    
+
     if (snapToGrid && gridSize) {
       currentX = Math.round(currentX / gridSize) * gridSize;
       currentY = Math.round(currentY / gridSize) * gridSize;
     }
-    
+
     setNewBox({
       ...newBox,
       width: currentX - newBox.x,
@@ -130,20 +130,20 @@ export default function ImageCanvas({
   const handleMouseUp = (e: any) => {
     if (isDrawing && newBox) {
       setIsDrawing(false);
-      
+
       const stage = e.target.getStage();
       const pos = getPointerPos(stage);
       let finalX = pos.x / scale;
       let finalY = pos.y / scale;
-      
+
       if (snapToGrid && gridSize) {
         finalX = Math.round(finalX / gridSize) * gridSize;
         finalY = Math.round(finalY / gridSize) * gridSize;
       }
-      
+
       const finalWidth = finalX - newBox.x;
       const finalHeight = finalY - newBox.y;
-      
+
       // Only create if it has some minimum size
       if (Math.abs(finalWidth) > 10 && Math.abs(finalHeight) > 10) {
         // Normalize coordinates (handle negative width/height)
@@ -151,7 +151,7 @@ export default function ImageCanvas({
         let xmax = Math.max(newBox.x, newBox.x + finalWidth);
         let ymin = Math.min(newBox.y, newBox.y + finalHeight);
         let ymax = Math.max(newBox.y, newBox.y + finalHeight);
-        
+
         // Convert to 1000x1000 coordinate system used by LetterBox
         const box: [number, number, number, number] = [
           (ymin / imageElement.height) * 1000,
@@ -159,13 +159,13 @@ export default function ImageCanvas({
           (ymax / imageElement.height) * 1000,
           (xmax / imageElement.width) * 1000
         ];
-        
+
         const newLetter: LetterBox = {
           id: Math.random().toString(36).substring(7),
           char: '?',
           box
         };
-        
+
         setLetters(prev => [...prev, newLetter]);
         setSelectedLetterId(newLetter.id);
       }
@@ -198,7 +198,7 @@ export default function ImageCanvas({
               height={dimensions.height}
               name="backgroundImage"
             />
-            
+
             {snapToGrid && gridSize > 0 && (
               <Group opacity={0.15} listening={false}>
                 {Array.from({ length: Math.ceil(imageElement.width / gridSize) + 1 }).map((_, i) => (
@@ -219,7 +219,7 @@ export default function ImageCanvas({
                 ))}
               </Group>
             )}
-            
+
             {letters.map((letter) => (
               <LetterRect
                 key={letter.id}
@@ -236,7 +236,7 @@ export default function ImageCanvas({
                 gridSize={gridSize}
               />
             ))}
-            
+
             {isDrawing && newBox && (
               <Rect
                 x={newBox.x * scale}
@@ -280,7 +280,7 @@ const LetterRect = ({ letter, isSelected, onSelect, onChange, imageWidth, imageH
   }, [isSelected]);
 
   const [ymin, xmin, ymax, xmax] = letter.box;
-  
+
   // Convert from 1000x1000 coordinate system to original image pixels
   const x = (xmin / 1000) * imageWidth;
   const y = (ymin / 1000) * imageHeight;
@@ -327,21 +327,21 @@ const LetterRect = ({ letter, isSelected, onSelect, onChange, imageWidth, imageH
           if (!snapToGrid || !gridSize) return pos;
           const stage = shapeRef.current?.getStage();
           if (!stage) return pos;
-          
+
           const transform = stage.getAbsoluteTransform().copy().invert();
           const localPos = transform.point(pos);
-          
+
           let unscaledX = localPos.x / scale;
           let unscaledY = localPos.y / scale;
-          
+
           unscaledX = Math.round(unscaledX / gridSize) * gridSize;
           unscaledY = Math.round(unscaledY / gridSize) * gridSize;
-          
+
           const snappedLocalPos = {
             x: unscaledX * scale,
             y: unscaledY * scale
           };
-          
+
           const absoluteTransform = stage.getAbsoluteTransform();
           return absoluteTransform.point(snappedLocalPos);
         }}
@@ -351,7 +351,7 @@ const LetterRect = ({ letter, isSelected, onSelect, onChange, imageWidth, imageH
           const node = shapeRef.current;
           let newX = node.x() / scale;
           let newY = node.y() / scale;
-          
+
           newX = handleSnap(newX);
           newY = handleSnap(newY);
 
@@ -360,7 +360,7 @@ const LetterRect = ({ letter, isSelected, onSelect, onChange, imageWidth, imageH
           const newYMin = (newY / imageHeight) * 1000;
           const newXMax = ((newX + width) / imageWidth) * 1000;
           const newYMax = ((newY + height) / imageHeight) * 1000;
-          
+
           onChange([newYMin, newXMin, newYMax, newXMax]);
         }}
         onTransformEnd={(e) => {
@@ -391,10 +391,10 @@ const LetterRect = ({ letter, isSelected, onSelect, onChange, imageWidth, imageH
           onChange([newYMin, newXMin, newYMax, newXMax]);
         }}
       />
-      
+
       {/* Label */}
-      <Group 
-        x={x * scale} 
+      <Group
+        x={x * scale}
         y={y * scale}
         onClick={onSelect}
         onTap={onSelect}
@@ -437,12 +437,12 @@ const LetterRect = ({ letter, isSelected, onSelect, onChange, imageWidth, imageH
               let unscaledY = newBox.y / scale;
               let unscaledW = newBox.width / scale;
               let unscaledH = newBox.height / scale;
-              
+
               unscaledX = Math.round(unscaledX / gridSize) * gridSize;
               unscaledY = Math.round(unscaledY / gridSize) * gridSize;
               unscaledW = Math.round(unscaledW / gridSize) * gridSize;
               unscaledH = Math.round(unscaledH / gridSize) * gridSize;
-              
+
               return {
                 x: unscaledX * scale,
                 y: unscaledY * scale,
