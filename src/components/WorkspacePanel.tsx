@@ -20,6 +20,9 @@ type WorkspacePanelProps = {
   onCanvasKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   isCanvasFocused: boolean;
   isManualMode: boolean;
+  previewText: string;
+  previewSvg: string;
+  onPreviewTextChange: (text: string) => void;
 };
 
 export function WorkspacePanel({
@@ -41,6 +44,9 @@ export function WorkspacePanel({
   onCanvasKeyDown,
   isCanvasFocused,
   isManualMode,
+  previewText,
+  previewSvg,
+  onPreviewTextChange,
 }: WorkspacePanelProps) {
   return (
     <section className="canvas-column panel-animated panel-delay-0">
@@ -159,6 +165,38 @@ export function WorkspacePanel({
           </div>
         )}
       </div>
+
+      {imageElement && letters.length > 0 && (
+        <div className="surface preview-surface panel-animated panel-delay-1">
+          <div className="surface-header">
+            <div>
+              <p className="surface-kicker">Live preview</p>
+              <h2>Font preview</h2>
+              <p className="surface-copy">
+                See how your font renders in real time. Edit the sample text to test different characters.
+              </p>
+            </div>
+          </div>
+
+          <input
+            type="text"
+            value={previewText}
+            onChange={(e) => onPreviewTextChange(e.target.value)}
+            className="ui-input preview-input"
+            placeholder="Type to preview..."
+          />
+
+          <div className="preview-canvas">
+            {previewSvg ? (
+              <div dangerouslySetInnerHTML={{ __html: previewSvg }} className="preview-render" />
+            ) : (
+              <p className="preview-placeholder">
+                {previewText ? 'Generating preview...' : 'Type text to preview'}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
