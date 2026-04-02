@@ -787,6 +787,46 @@ code {
   }
 }
 
+/* === PREVIEW === */
+.preview-surface {
+  padding: 24px;
+}
+
+.preview-input {
+  margin-bottom: 16px;
+}
+
+.preview-canvas {
+  border: 1px solid rgba(58, 45, 29, 0.08);
+  border-radius: 18px;
+  padding: 20px;
+  background: rgba(255, 253, 248, 0.82);
+  min-height: 120px;
+  overflow-x: auto;
+  display: flex;
+  align-items: center;
+}
+
+.preview-render {
+  color: var(--text);
+  width: 100%;
+}
+
+.preview-render svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.preview-placeholder {
+  margin: 0;
+  width: 100%;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  font-weight: 400;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .topbar-animated,
   .panel-animated,

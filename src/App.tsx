@@ -8,7 +8,7 @@ import { TopBar } from './components/TopBar';
 import { Notice } from './components/types';
 import { WorkspacePanel } from './components/WorkspacePanel';
 import { detectLetters } from './utils/gemini';
-import { generateFont, LetterBox } from './utils/fontGenerator';
+import { createFont, generateFont, LetterBox } from './utils/fontGenerator';
 import { createManualLetterBox, pointInLetterBox } from './utils/glyphBox';
 
 const DEFAULT_NOTICE: Notice = {
@@ -36,6 +36,8 @@ export default function App() {
   const [isCanvasFocused, setIsCanvasFocused] = useState(false);
   const [draftBox, setDraftBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
   const [isManualMode, setIsManualMode] = useState(false);
+  const [previewText, setPreviewText] = useState('The quick brown fox jumps over the lazy dog');
+  const [previewSvg, setPreviewSvg] = useState<string>('');
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const canvasStageRef = useRef<HTMLDivElement>(null);
@@ -262,6 +264,34 @@ export default function App() {
 
   }, [draftBox, imageElement, letters, selectedLetterId, isCanvasFocused]);
 
+  useEffect(() => {
+    if (!imageElement || letters.length === 0 || !previewText) {
+      setPreviewSvg('');
+      return;
+    }
+
+    try {
+      const font = createFont(imageElement, letters, isDarkText, fontName, {
+        ascender: 800,
+        descender: -200,
+        xHeight: 520,
+        capHeight: 700,
+      });
+      const fontSize = 72;
+      const baselineY = 800 * (fontSize / 1000);
+      const path = font.getPath(previewText, 0, baselineY, fontSize);
+      const width = Math.max(1, font.getAdvanceWidth(previewText, fontSize));
+      const height = Math.max(1, (800 - (-200)) * (fontSize / 1000));
+
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+        ${path.toSVG(2).replace('<path', '<path fill="currentColor"')}
+      </svg>`;
+      setPreviewSvg(svg);
+    } catch (err) {
+      console.error('Failed to generate preview', err);
+    }
+  }, [imageElement, letters, isDarkText, fontName, previewText]);
+
   const getCanvasPoint = (clientX: number, clientY: number) => {
     if (!canvasRef.current || !imageElement) return null;
 
@@ -469,26 +499,29 @@ export default function App() {
       <TopBar workflowLabel={workflowLabel} />
 
       <main className="workspace-grid">
-        <WorkspacePanel
-          imageElement={imageElement}
-          letters={letters}
-          selectedLetter={selectedLetter}
-          isProcessing={isProcessing}
-          canDetect={Boolean(imageFile)}
-          onLoadDemo={handleLoadDemo}
-          onDetect={handleDetect}
-          onBeginManualMode={handleBeginManualMode}
-          onOpenFilePicker={handleOpenFilePicker}
-          canvasRef={canvasRef}
-          onCanvasClick={handleCanvasClick}
-          onCanvasPointerDown={handleCanvasPointerDown}
-          onCanvasPointerMove={handleCanvasPointerMove}
-          onCanvasPointerUp={handleCanvasPointerUp}
-          canvasStageRef={canvasStageRef}
-          onCanvasKeyDown={handleCanvasKeyDown}
-          isCanvasFocused={isCanvasFocused}
-          isManualMode={isManualMode}
-        />
+          <WorkspacePanel
+            imageElement={imageElement}
+            letters={letters}
+            selectedLetter={selectedLetter}
+            isProcessing={isProcessing}
+            canDetect={Boolean(imageFile)}
+            onLoadDemo={handleLoadDemo}
+            onDetect={handleDetect}
+            onBeginManualMode={handleBeginManualMode}
+            onOpenFilePicker={handleOpenFilePicker}
+            canvasRef={canvasRef}
+            onCanvasClick={handleCanvasClick}
+            onCanvasPointerDown={handleCanvasPointerDown}
+            onCanvasPointerMove={handleCanvasPointerMove}
+            onCanvasPointerUp={handleCanvasPointerUp}
+            canvasStageRef={canvasStageRef}
+            onCanvasKeyDown={handleCanvasKeyDown}
+            isCanvasFocused={isCanvasFocused}
+            isManualMode={isManualMode}
+            previewText={previewText}
+            previewSvg={previewSvg}
+            onPreviewTextChange={setPreviewText}
+          />
 
         <aside className="inspector-column">
           <SelectedGlyphPanel
