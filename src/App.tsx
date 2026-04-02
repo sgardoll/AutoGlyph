@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Type, Download, Loader2, Settings, Trash2, Plus } from 'lucide-react';
-import { LetterBox, FontMetrics, createFont, downloadFont } from './utils/fontGenerator';
+import { LetterBox, FontMetrics, DEFAULT_METRICS, createFont, downloadFont } from './utils/fontGenerator';
 import { detectLetters, suggestKerning, KerningPair } from './utils/gemini';
 import { DEMO_ALPHABET_URL, DEMO_LETTERS } from './demoAlphabet';
+import { SafeSvg } from './components/SafeSvg';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 import ImageCanvas from './components/ImageCanvas';
 
@@ -14,20 +16,28 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDarkText, setIsDarkText] = useState(true);
   const [fontName, setFontName] = useState('My Custom Font');
-  const [metrics, setMetrics] = useState<FontMetrics>({
-    ascender: 800,
-    descender: -200,
-    xHeight: 500,
-    capHeight: 700
-  });
+  const [metrics, setMetrics] = useState<FontMetrics>(DEFAULT_METRICS);
   const [kerningPairs, setKerningPairs] = useState<KerningPair[]>([]);
   const [isSuggestingKerning, setIsSuggestingKerning] = useState(false);
   const [previewText, setPreviewText] = useState('The quick brown fox jumps over the lazy dog');
   const [previewSvg, setPreviewSvg] = useState<string>('');
+  const [debouncedPreviewText, setDebouncedPreviewText] = useState('The quick brown fox jumps over the lazy dog');
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [gridSize, setGridSize] = useState(10);
 
+  const blobUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedPreviewText(previewText), 300);
+    return () => clearTimeout(timer);
+  }, [previewText]);
+
   const loadImageFromSource = (src: string, nextFile?: File | null) => {
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+
     setImageFile(nextFile ?? null);
     setLetters([]);
     setSelectedLetterId(null);
@@ -37,22 +47,33 @@ export default function App() {
       setImageElement(img);
     };
     img.src = src;
+
+    if (src.startsWith('blob:')) {
+      blobUrlRef.current = src;
+    }
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+
     setImageFile(file);
     setLetters([]);
     setSelectedLetterId(null);
 
     const url = URL.createObjectURL(file);
+    blobUrlRef.current = url;
     const img = new Image();
     img.onload = () => {
       setImageElement(img);
     };
     img.src = url;
+    e.target.value = '';
   };
 
   const handleLoadDemo = async () => {
@@ -125,7 +146,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!imageElement || letters.length === 0 || !previewText) {
+    if (!imageElement || letters.length === 0 || !debouncedPreviewText) {
       setPreviewSvg('');
       return;
     }
@@ -134,8 +155,8 @@ export default function App() {
       const font = createFont(imageElement, letters, isDarkText, fontName, metrics, kerningPairs);
       const fontSize = 72;
       const baselineY = metrics.ascender * (fontSize / 1000);
-      const path = font.getPath(previewText, 0, baselineY, fontSize);
-      const width = Math.max(1, font.getAdvanceWidth(previewText, fontSize));
+      const path = font.getPath(debouncedPreviewText, 0, baselineY, fontSize);
+      const width = Math.max(1, font.getAdvanceWidth(debouncedPreviewText, fontSize));
       const height = Math.max(1, (metrics.ascender - metrics.descender) * (fontSize / 1000));
 
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
@@ -145,7 +166,7 @@ export default function App() {
     } catch (err) {
       console.error("Failed to generate preview", err);
     }
-  }, [imageElement, letters, isDarkText, fontName, metrics, kerningPairs, previewText]);
+  }, [imageElement, letters, isDarkText, fontName, metrics, kerningPairs, debouncedPreviewText]);
 
   const updateSelectedChar = (char: string) => {
     if (!selectedLetterId) return;
@@ -208,16 +229,17 @@ export default function App() {
             </div>
 
             {imageElement ? (
-              <div className="relative border border-neutral-200 rounded-lg overflow-hidden bg-neutral-100">
-                <ImageCanvas
-                  imageElement={imageElement}
-                  letters={letters}
-                  setLetters={setLetters}
-                  selectedLetterId={selectedLetterId}
-                  setSelectedLetterId={setSelectedLetterId}
-                  snapToGrid={snapToGrid}
-                  gridSize={gridSize}
-                />
+              <ErrorBoundary>
+                <div className="relative border border-neutral-200 rounded-lg overflow-hidden bg-neutral-100">
+                  <ImageCanvas
+                    imageElement={imageElement}
+                    letters={letters}
+                    setLetters={setLetters}
+                    selectedLetterId={selectedLetterId}
+                    setSelectedLetterId={setSelectedLetterId}
+                    snapToGrid={snapToGrid}
+                    gridSize={gridSize}
+                  />
                 {letters.length === 0 && !isProcessing && (
                   <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm">
                     <button
@@ -235,7 +257,8 @@ export default function App() {
                     <p className="text-sm font-medium text-neutral-600">Analyzing image and finding letters...</p>
                   </div>
                 )}
-              </div>
+                </div>
+              </ErrorBoundary>
             ) : (
               <div className="border-2 border-dashed border-neutral-300 rounded-xl p-12 flex flex-col items-center justify-center text-center bg-neutral-50">
                 <Upload className="w-10 h-10 text-neutral-400 mb-4" />
@@ -261,25 +284,27 @@ export default function App() {
           </div>
 
           {/* Real-time Preview */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-            <h2 className="text-lg font-medium mb-4">Real-time Preview</h2>
-            <input
-              type="text"
-              value={previewText}
-              onChange={(e) => setPreviewText(e.target.value)}
-              className="w-full border border-neutral-300 rounded-lg px-3 py-2 mb-4 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-              placeholder="Type to preview..."
-            />
-            <div className="border border-neutral-200 rounded-lg p-4 bg-neutral-50 overflow-x-auto min-h-[120px] flex items-center">
-              {previewSvg ? (
-                <div dangerouslySetInnerHTML={{ __html: previewSvg }} className="text-neutral-900" />
-              ) : (
-                <p className="text-sm text-neutral-400 text-center w-full">
-                  {letters.length > 0 ? (previewText ? 'Generating preview...' : 'Type text to preview') : 'Detect letters to see preview'}
-                </p>
-              )}
+          <ErrorBoundary>
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
+              <h2 className="text-lg font-medium mb-4">Real-time Preview</h2>
+              <input
+                type="text"
+                value={previewText}
+                onChange={(e) => setPreviewText(e.target.value)}
+                className="w-full border border-neutral-300 rounded-lg px-3 py-2 mb-4 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                placeholder="Type to preview..."
+              />
+              <div className="border border-neutral-200 rounded-lg p-4 bg-neutral-50 overflow-x-auto min-h-[120px] flex items-center">
+                {previewSvg ? (
+                  <SafeSvg svg={previewSvg} className="text-neutral-900" />
+                ) : (
+                  <p className="text-sm text-neutral-400 text-center w-full">
+                    {letters.length > 0 ? (previewText ? 'Generating preview...' : 'Type text to preview') : 'Detect letters to see preview'}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
+          </ErrorBoundary>
         </div>
 
         {/* Right Column: Settings & Export */}

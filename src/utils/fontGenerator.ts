@@ -14,6 +14,13 @@ export type FontMetrics = {
   capHeight: number;
 };
 
+export const DEFAULT_METRICS: FontMetrics = {
+  ascender: 800,
+  descender: -200,
+  xHeight: 500,
+  capHeight: 700,
+};
+
 function getCharMetrics(char: string, metrics: FontMetrics) {
   // Numerals
   if (/[0-9]/.test(char)) return { align: 'bottom', targetY: 0, targetH: metrics.capHeight };
@@ -204,10 +211,14 @@ export function createFont(
     glyphs: glyphs
   });
 
-  // Workaround for opentype.js bug where glyphs might not be populated
-  for (let i = 0; i < glyphs.length; i++) {
-    if ((font.glyphs as any).glyphs[i] === undefined) {
-      (font.glyphs as any).glyphs[i] = glyphs[i];
+  const glyphsCollection = font.glyphs as unknown as Record<string, unknown>;
+  const internalGlyphs = glyphsCollection.glyphs;
+
+  if (internalGlyphs && typeof internalGlyphs === 'object') {
+    for (let i = 0; i < glyphs.length; i++) {
+      if (internalGlyphs[i] === undefined) {
+        internalGlyphs[i] = glyphs[i];
+      }
     }
   }
 
@@ -465,8 +476,8 @@ export function downloadFont(
   const link = document.createElement('a');
   link.href = url;
 
-  const familyName = font.names.fontFamily.en.replace(/\s/g, '');
-  const styleName = font.names.fontSubfamily.en;
+  const familyName = (font.names.fontFamily?.en ?? 'CustomFont').replace(/\s/g, '');
+  const styleName = font.names.fontSubfamily?.en ?? 'Regular';
   link.download = `${familyName}-${styleName}.${format}`;
 
   document.body.appendChild(link);

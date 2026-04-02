@@ -8,6 +8,8 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
+      // SECURITY WARNING: This exposes the Gemini API key to the client bundle.
+      // For production, create a server endpoint and remove this line.
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
     resolve: {
