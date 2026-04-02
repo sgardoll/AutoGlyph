@@ -474,3 +474,19 @@ export function downloadFont(
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+export function generateFont(
+  imageElement: HTMLImageElement,
+  letters: LetterBox[],
+  isDarkText: boolean,
+  fontName: string,
+) {
+  const font = createFont(imageElement, letters, isDarkText, fontName, {
+    ascender: 800,
+    descender: -200,
+    xHeight: 520,
+    capHeight: 700,
+  });
+
+  downloadFont(font, [], 'otf');
+}

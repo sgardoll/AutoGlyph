@@ -6,6 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+!.env.deploy.example
+.env.host.local
 .sisyphus/ralph-loop.local.md
 /.serena
 /.playwright-mcp
+.env.deploy.example

@@ -1,128 +1,116 @@
-import { GoogleGenAI, Type } from '@google/genai';
 import { LetterBox } from './fontGenerator';
 
-export const detectLetters = async (base64Image: string, mimeType: string): Promise<LetterBox[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// TODO(showcase-security): Keep Gemini access behind the server endpoint before using this as a public showcase.
+// The frontend should never ship a real production API key or call the Gemini SDK directly.
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
-    contents: [
-      {
-        inlineData: {
-          data: base64Image.split(',')[1],
-          mimeType: mimeType,
+type DetectLettersResponse = {
+  letters?: Array<{
+    char: string;
+    box: [number, number, number, number];
+  }>;
+  error?: string;
+};
+
+/**
+ * Tighten Gemini's approximate bounding boxes using actual pixel data.
+ * Gemini returns normalized 0-1000 coordinates that are often loose.
+ * This function scans the actual image pixels within each box and
+ * shrinks the box to the tightest ink boundary.
+ */
+function tightenBoxes(
+  img: HTMLImageElement,
+  boxes: Array<{ char: string; box: [number, number, number, number] }>,
+  threshold = 240,
+): Array<{ char: string; box: [number, number, number, number] }> {
+  const tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width = img.naturalWidth;
+  tmpCanvas.height = img.naturalHeight;
+  const ctx = tmpCanvas.getContext('2d');
+  if (!ctx) return boxes;
+
+  ctx.drawImage(img, 0, 0);
+  const imageData = ctx.getImageData(0, 0, tmpCanvas.width, tmpCanvas.height);
+  const data = imageData.data;
+  const w = tmpCanvas.width;
+  const h = tmpCanvas.height;
+
+  return boxes.map(({ char, box }) => {
+    const [yminNorm, xminNorm, ymaxNorm, xmaxNorm] = box;
+    const x0 = Math.max(0, Math.floor((xminNorm / 1000) * w));
+    const y0 = Math.max(0, Math.floor((yminNorm / 1000) * h));
+    const x1 = Math.min(w - 1, Math.ceil((xmaxNorm / 1000) * w));
+    const y1 = Math.min(h - 1, Math.ceil((ymaxNorm / 1000) * h));
+
+    // Find tight bounds by scanning for non-background pixels
+    let minX = x1, minY = y1, maxX = x0, maxY = y0;
+
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const idx = (y * w + x) * 4;
+        const r = data[idx], g = data[idx + 1], b = data[idx + 2], a = data[idx + 3];
+        // Detect ink: not near white/transparent background
+        const isLight = (r + g + b) / 3 > threshold && a > 128;
+        if (!isLight) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
         }
-      },
-      {
-        text: `Analyze this image containing handwritten or printed characters.
-Identify the bounding box for each character present.
-
-CRITICAL INSTRUCTIONS FOR BOUNDING BOXES:
-1. The bounding boxes MUST be extremely tight around the visible ink of each individual character.
-2. DO NOT include any extra whitespace around the character.
-3. EXTREMELY IMPORTANT: DO NOT include EVEN A SINGLE PIXEL of adjacent characters. If characters are close or touching, you must carefully isolate the target character. Including stray pixels from a taller adjacent character will completely ruin the font generation process.
-4. For characters with ascenders (like 'h', 'l', 't', 'i', 'j') or descenders (like 'g', 'p', 'y', 'j', 'q'), ensure the box accurately captures the full vertical extent of the ink, including dots and descenders.
-5. For characters like 'i' and 'j', the bounding box MUST include the dot.
-
-Include uppercase and lowercase letters (A-Z, a-z), numerals (0-9), and common punctuation marks (!?. ,).
-Return a JSON object with a 'letters' array.
-Each element should have:
-- 'char': the character (e.g., 'A', 'a', '0', '!', '.')
-- 'box': [ymin, xmin, ymax, xmax] where values are normalized between 0 and 1000.
-Ensure you find as many characters as possible, and that their bounding boxes are perfectly tight to avoid wonky alignment when converted to a font.`
-      }
-    ],
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          letters: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                char: { type: Type.STRING },
-                box: {
-                  type: Type.ARRAY,
-                  items: { type: Type.NUMBER }
-                }
-              },
-              required: ['char', 'box']
-            }
-          }
-        },
-        required: ['letters']
       }
     }
+
+    // If no ink found, keep original box
+    if (maxX < minX || maxY < minY) return { char, box };
+
+    return {
+      char,
+      box: [
+        Math.round((minY / h) * 1000),
+        Math.round((minX / w) * 1000),
+        Math.round((maxY / h) * 1000),
+        Math.round((maxX / w) * 1000),
+      ] as [number, number, number, number],
+    };
+  });
+}
+
+export const detectLetters = async (
+  base64Image: string,
+  mimeType: string,
+  imageElement?: HTMLImageElement,
+): Promise<LetterBox[]> => {
+  const response = await fetch('/api/detect-letters.php', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      imageDataUrl: base64Image,
+      mimeType,
+    }),
   });
 
-  if (!response.text) {
-    throw new Error('No response from Gemini');
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('Gemini detection endpoint returned a non-JSON response. Check /api/detect-letters.php on the server.');
   }
 
-  const result = JSON.parse(response.text);
+  const result = (await response.json()) as DetectLettersResponse;
 
-  return result.letters.map((l: any, i: number) => ({
-    id: `letter-${i}-${Date.now()}`,
-    char: l.char,
-    box: l.box
+  if (!response.ok) {
+    throw new Error(result.error || 'Failed to detect letters.');
+  }
+
+  let letters = result.letters ?? [];
+
+  // Tighten boxes using actual pixel data if we have the image element
+  if (imageElement && letters.length > 0) {
+    letters = tightenBoxes(imageElement, letters);
+  }
+
+  return letters.map((letter, index) => ({
+    id: `letter-${index}-${Date.now()}`,
+    char: letter.char,
+    box: letter.box,
   }));
-};
-
-export type KerningPair = {
-  left: string;
-  right: string;
-  value: number;
-};
-
-export const suggestKerning = async (base64Image: string, mimeType: string, detectedChars: string[]): Promise<KerningPair[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
-    contents: [
-      {
-        inlineData: {
-          data: base64Image.split(',')[1],
-          mimeType: mimeType,
-        }
-      },
-      {
-        text: `Analyze the handwriting or font style in this image.
-Based on the visual style and the characters present (${detectedChars.join(', ')}), suggest kerning pairs to improve visual harmony.
-Focus on problematic pairs like 'AV', 'To', 'We', 'P.', 'L\'', 'WA', etc.
-The kerning value should be in font units (typically between -150 and 150, where negative means closer together).
-Return a JSON object with a 'kerning' array.`
-      }
-    ],
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          kerning: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                left: { type: Type.STRING },
-                right: { type: Type.STRING },
-                value: { type: Type.NUMBER }
-              },
-              required: ['left', 'right', 'value']
-            }
-          }
-        },
-        required: ['kerning']
-      }
-    }
-  });
-
-  if (!response.text) {
-    throw new Error('No response from Gemini');
-  }
-
-  const result = JSON.parse(response.text);
-  return result.kerning || [];
 };

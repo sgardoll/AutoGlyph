@@ -78,6 +78,7 @@ npm install
 ### 2. Run locally
 
 ```bash
+npm run server
 npm run dev
 ```
 
@@ -101,7 +102,7 @@ Set:
 GEMINI_API_KEY=your_key_here
 ```
 
-Then upload your own alphabet image and use `Detect Letters with AI`.
+Then run the server process and use `Detect with Gemini` when you want AI-assisted boxing.
 
 ## Best Results
 
@@ -152,6 +153,44 @@ docs/images/             README screenshots
 npm run lint
 npm run build
 ```
+
+## Quick Deploy To Your FTP Server
+
+This project now supports a deliberately simple personal-server deploy flow.
+
+1. Create a deploy env file:
+
+```bash
+cp .env.deploy.example .env.deploy.local
+```
+
+2. Put your FTP credentials in `.env.deploy.local`.
+
+3. Build and upload the site:
+
+```bash
+npm run build
+npm run deploy
+```
+
+Notes:
+
+- The deploy script uploads the contents of `dist/` to `public_html` by default.
+- `.env.deploy.local` stays gitignored via `.env*`, so your FTP password should not be committed.
+- FTPS is used by default (`FTP_SECURE=true`). If the host only accepts plain FTP, set `FTP_SECURE=false`.
+- The remote target can be changed with `FTP_REMOTE_DIR`.
+
+### Gemini on PHP hosting
+
+If your hosting account supports PHP, this repo now includes `public/api/detect-letters.php`.
+
+To enable Gemini detection in production:
+
+1. The deploy script uploads `public/api/detect-letters.php` into `public_html/api/`
+2. Put `GEMINI_API_KEY=your_key_here` in a server-side `.env.local` file at the project root on the host
+3. Confirm PHP has cURL enabled
+
+The frontend now calls `/api/detect-letters.php` in production.
 
 ## The Pitch
 

@@ -1,10 +1,27 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Type, Download, Loader2, Settings, Trash2, Plus } from 'lucide-react';
-import { LetterBox, FontMetrics, createFont, downloadFont } from './utils/fontGenerator';
-import { detectLetters, suggestKerning, KerningPair } from './utils/gemini';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { DEMO_ALPHABET_URL, DEMO_LETTERS } from './demoAlphabet';
+import { FontSettingsPanel } from './components/FontSettingsPanel';
+import { ProcessGuide } from './components/ProcessGuide';
+import { SelectedGlyphPanel } from './components/SelectedGlyphPanel';
+import { StatusPanel } from './components/StatusPanel';
+import { TopBar } from './components/TopBar';
+import { Notice } from './components/types';
+import { WorkspacePanel } from './components/WorkspacePanel';
+import { detectLetters } from './utils/gemini';
+import { generateFont, LetterBox } from './utils/fontGenerator';
+import { createManualLetterBox, pointInLetterBox } from './utils/glyphBox';
 
-import ImageCanvas from './components/ImageCanvas';
+const DEFAULT_NOTICE: Notice = {
+  tone: 'info',
+  title: 'Start with a sheet',
+  detail: 'Load the built-in demo or upload a photographed alphabet page to begin mapping glyphs.',
+};
+
+function formatGlyphCount(count: number) {
+  if (count === 0) return 'No glyphs';
+  if (count === 1) return '1 glyph';
+  return `${count} glyphs`;
+}
 
 export default function App() {
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -12,25 +29,59 @@ export default function App() {
   const [letters, setLetters] = useState<LetterBox[]>([]);
   const [selectedLetterId, setSelectedLetterId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [hasDetectedGlyphs, setHasDetectedGlyphs] = useState(false);
   const [isDarkText, setIsDarkText] = useState(true);
-  const [fontName, setFontName] = useState('My Custom Font');
-  const [metrics, setMetrics] = useState<FontMetrics>({
-    ascender: 800,
-    descender: -200,
-    xHeight: 500,
-    capHeight: 700
-  });
-  const [kerningPairs, setKerningPairs] = useState<KerningPair[]>([]);
-  const [isSuggestingKerning, setIsSuggestingKerning] = useState(false);
-  const [previewText, setPreviewText] = useState('The quick brown fox jumps over the lazy dog');
-  const [previewSvg, setPreviewSvg] = useState<string>('');
-  const [snapToGrid, setSnapToGrid] = useState(false);
-  const [gridSize, setGridSize] = useState(10);
+  const [fontName, setFontName] = useState('Field Notes Sans');
+  const [notice, setNotice] = useState<Notice>(DEFAULT_NOTICE);
+  const [isCanvasFocused, setIsCanvasFocused] = useState(false);
+  const [draftBox, setDraftBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+  const [isManualMode, setIsManualMode] = useState(false);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasStageRef = useRef<HTMLDivElement>(null);
+  const glyphInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const selectedIndex = useMemo(
+    () => letters.findIndex((letter) => letter.id === selectedLetterId),
+    [letters, selectedLetterId],
+  );
+
+  const selectedLetter = useMemo(
+    () => (selectedIndex >= 0 ? letters[selectedIndex] : null),
+    [letters, selectedIndex],
+  );
+
+  const workflowLabel = useMemo(() => {
+    if (!imageElement) return 'Awaiting source image';
+    if (isProcessing) return 'Detecting glyph regions';
+    if (letters.length === 0) return 'Ready for AI detection';
+    if (selectedLetter) return `Editing glyph “${selectedLetter.char || '?'}”`;
+    return 'Ready for export';
+  }, [imageElement, isProcessing, letters.length, selectedLetter]);
+
+  const selectIndex = (nextIndex: number) => {
+    if (letters.length === 0) {
+      setSelectedLetterId(null);
+      return;
+    }
+
+    const normalizedIndex = ((nextIndex % letters.length) + letters.length) % letters.length;
+    setSelectedLetterId(letters[normalizedIndex]?.id ?? null);
+  };
 
   const loadImageFromSource = (src: string, nextFile?: File | null) => {
     setImageFile(nextFile ?? null);
     setLetters([]);
+    setHasDetectedGlyphs(false);
     setSelectedLetterId(null);
+    setDraftBox(null);
+    setIsManualMode(false);
+    setNotice({
+      tone: 'info',
+      title: 'Image loaded',
+      detail: 'You can detect glyphs with Gemini or draw boxes manually. Export only needs labeled regions.',
+    });
 
     const img = new Image();
     img.onload = () => {
@@ -42,17 +93,13 @@ export default function App() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    setImageFile(file);
-    setLetters([]);
-    setSelectedLetterId(null);
-
     const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      setImageElement(img);
-    };
-    img.src = url;
+    loadImageFromSource(url, file);
+    e.target.value = '';
+  };
+
+  const handleOpenFilePicker = () => {
+    fileInputRef.current?.click();
   };
 
   const handleLoadDemo = async () => {
@@ -61,484 +108,441 @@ export default function App() {
     const demoFile = new File([blob], 'demo-alphabet.svg', { type: blob.type || 'image/svg+xml' });
 
     loadImageFromSource(DEMO_ALPHABET_URL, demoFile);
-    setLetters(DEMO_LETTERS.map(letter => ({ ...letter })));
+    const demoLetters = DEMO_LETTERS.map((letter) => ({ ...letter }));
+    setLetters(demoLetters);
+    setHasDetectedGlyphs(false);
+    setSelectedLetterId(demoLetters[0]?.id ?? null);
+    setNotice({
+      tone: 'success',
+      title: 'Demo loaded',
+      detail: 'The sample sheet is ready. Inspect a glyph or export immediately to test the full loop.',
+    });
   };
 
   const handleDetect = async () => {
     if (!imageFile) return;
+
     setIsProcessing(true);
+    setNotice({
+      tone: 'info',
+      title: 'Detecting glyphs',
+      detail: 'Gemini is scanning the page and proposing boxes. This can take a moment.',
+    });
 
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        const base64 = reader.result as string;
-        const detected = await detectLetters(base64, imageFile.type);
-        setLetters(detected);
-      } catch (error: any) {
-        console.error('Error detecting letters:', error);
-        if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota')) {
-          alert('You have exceeded your Gemini API quota. Please check your plan and billing details, or try again later.');
-        } else {
-          alert('Failed to detect letters. Please try again.');
-        }
-      } finally {
-        setIsProcessing(false);
-      }
-    };
-    reader.readAsDataURL(imageFile);
-  };
-
-  const handleDownload = (format: 'otf' | 'ttf' | 'woff') => {
-    if (!imageElement || letters.length === 0) return;
     try {
-      const font = createFont(imageElement, letters, isDarkText, fontName, metrics, kerningPairs);
-      downloadFont(font, kerningPairs, format);
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result;
+          if (typeof result === 'string') {
+            resolve(result);
+            return;
+          }
+          reject(new Error('Unable to read the uploaded image.'));
+        };
+        reader.onerror = () => {
+          reject(reader.error ?? new Error('Unable to read the uploaded image.'));
+        };
+        reader.readAsDataURL(imageFile);
+      });
+
+      const detected = await detectLetters(base64, imageFile.type, imageElement ?? undefined);
+      setLetters(detected);
+      setHasDetectedGlyphs(true);
+      setSelectedLetterId(detected[0]?.id ?? null);
+      setNotice({
+        tone: 'success',
+        title: 'Detection complete',
+      detail:
+          detected.length > 0
+            ? `Review ${formatGlyphCount(detected.length).toLowerCase()} and correct any mismatched labels before export.`
+            : 'No glyphs were detected. Try a higher-contrast page or load the demo to test the workflow.',
+      });
     } catch (error) {
-      console.error('Error generating font:', error);
-      alert('Failed to generate font. Check console for details.');
+      const detail = error instanceof Error ? error.message : 'Failed to detect letters. Please try again.';
+      setNotice({
+        tone: 'error',
+        title: 'Detection failed',
+        detail: `${detail} You can still continue by drawing boxes manually.`,
+      });
+      console.error('Error detecting letters:', error);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  const handleSuggestKerning = async () => {
-    if (!imageFile || letters.length === 0) return;
-    setIsSuggestingKerning(true);
+  const handleGenerate = () => {
+    if (!imageElement || letters.length === 0) return;
 
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        const base64 = reader.result as string;
-        const detectedChars = Array.from(new Set<string>(letters.map(l => l.char)));
-        const suggestions = await suggestKerning(base64, imageFile.type, detectedChars);
-        setKerningPairs(suggestions);
-      } catch (error: any) {
-        console.error('Error suggesting kerning:', error);
-        if (error.message?.includes('429') || error.status === 429 || error.message?.includes('quota')) {
-          alert('You have exceeded your Gemini API quota. Please check your plan and billing details, or try again later.');
-        } else {
-          alert('Failed to suggest kerning pairs. Please try again.');
-        }
-      } finally {
-        setIsSuggestingKerning(false);
-      }
-    };
-    reader.readAsDataURL(imageFile);
+    try {
+      generateFont(imageElement, letters, isDarkText, fontName);
+      setNotice({
+        tone: 'success',
+        title: 'Font exported',
+        detail: `Downloaded ${fontName || 'your font'} as an OpenType file.`,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Failed to generate font. Check console for details.';
+      setNotice({
+        tone: 'error',
+        title: 'Export failed',
+        detail,
+      });
+      console.error('Error generating font:', error);
+    }
   };
 
   useEffect(() => {
-    if (!imageElement || letters.length === 0 || !previewText) {
-      setPreviewSvg('');
+    const canvas = canvasRef.current;
+    if (!canvas || !imageElement) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = imageElement.width;
+    canvas.height = imageElement.height;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(imageElement, 0, 0);
+
+    letters.forEach((letter, index) => {
+      const [ymin, xmin, ymax, xmax] = letter.box;
+      const x = (xmin / 1000) * canvas.width;
+      const y = (ymin / 1000) * canvas.height;
+      const w = ((xmax - xmin) / 1000) * canvas.width;
+      const h = ((ymax - ymin) / 1000) * canvas.height;
+
+      const isSelected = selectedLetterId === letter.id;
+
+      ctx.strokeStyle = isSelected ? '#d95d39' : '#315b8a';
+      ctx.lineWidth = isSelected ? 4 : 2;
+      ctx.strokeRect(x, y, w, h);
+
+      ctx.fillStyle = isSelected ? '#d95d39' : '#315b8a';
+      ctx.fillRect(x, y - 28, 28, 28);
+
+      ctx.fillStyle = '#f7f2e8';
+      ctx.font = '700 16px ui-sans-serif, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(letter.char, x + 14, y - 14);
+
+      if (isSelected) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(217, 93, 57, 0.35)';
+        ctx.lineWidth = 10;
+        ctx.strokeRect(x - 4, y - 4, w + 8, h + 8);
+        ctx.restore();
+      }
+
+      if (isCanvasFocused) {
+        ctx.save();
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = isSelected ? '#d95d39' : '#315b8a';
+        ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
+        ctx.fillText(String(index + 1), x + w - 10, y + 12);
+        ctx.restore();
+      }
+    });
+
+    if (draftBox) {
+      const x = Math.min(draftBox.startX, draftBox.currentX) * canvas.width;
+      const y = Math.min(draftBox.startY, draftBox.currentY) * canvas.height;
+      const w = Math.abs(draftBox.currentX - draftBox.startX) * canvas.width;
+      const h = Math.abs(draftBox.currentY - draftBox.startY) * canvas.height;
+
+      ctx.save();
+      ctx.strokeStyle = '#2f7a4c';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = 'rgba(47, 122, 76, 0.12)';
+      ctx.fillRect(x, y, w, h);
+      ctx.restore();
+    }
+
+  }, [draftBox, imageElement, letters, selectedLetterId, isCanvasFocused]);
+
+  const getCanvasPoint = (clientX: number, clientY: number) => {
+    if (!canvasRef.current || !imageElement) return null;
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const normalizedX = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+    const normalizedY = Math.min(Math.max((clientY - rect.top) / rect.height, 0), 1);
+    return { normalizedX, normalizedY };
+  };
+
+  const commitDraftBox = (draft: { startX: number; startY: number; currentX: number; currentY: number }) => {
+    const newLetter = createManualLetterBox(draft.startX, draft.startY, draft.currentX, draft.currentY);
+
+    if (!newLetter) {
+      setDraftBox(null);
       return;
     }
 
-    try {
-      const font = createFont(imageElement, letters, isDarkText, fontName, metrics, kerningPairs);
-      const fontSize = 72;
-      const baselineY = metrics.ascender * (fontSize / 1000);
-      const path = font.getPath(previewText, 0, baselineY, fontSize);
-      const width = Math.max(1, font.getAdvanceWidth(previewText, fontSize));
-      const height = Math.max(1, (metrics.ascender - metrics.descender) * (fontSize / 1000));
+    setLetters((prev) => [...prev, newLetter]);
+    setSelectedLetterId(newLetter.id);
+    setHasDetectedGlyphs(false);
+    setDraftBox(null);
+    setIsManualMode(true);
+    setNotice({
+      tone: 'success',
+      title: 'Manual glyph added',
+      detail: 'Label the new region in the inspector, then continue drawing or export when ready.',
+    });
+  };
 
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-        ${path.toSVG(2).replace('<path', '<path fill="currentColor"')}
-      </svg>`;
-      setPreviewSvg(svg);
-    } catch (err) {
-      console.error("Failed to generate preview", err);
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || !imageElement) return;
+    if (draftBox) {
+      commitDraftBox(draftBox);
+      canvasStageRef.current?.focus();
+      return;
     }
-  }, [imageElement, letters, isDarkText, fontName, metrics, kerningPairs, previewText]);
+
+    if (isManualMode) {
+      const point = getCanvasPoint(e.clientX, e.clientY);
+      if (!point) return;
+
+      setDraftBox({
+        startX: point.normalizedX,
+        startY: point.normalizedY,
+        currentX: point.normalizedX,
+        currentY: point.normalizedY,
+      });
+      canvasStageRef.current?.focus();
+      return;
+    }
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const scaleX = canvasRef.current.width / rect.width;
+    const scaleY = canvasRef.current.height / rect.height;
+
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+
+    const normalizedX = x / canvasRef.current.width;
+    const normalizedY = y / canvasRef.current.height;
+    const clicked = [...letters].reverse().find((letter) => pointInLetterBox(letter, normalizedX, normalizedY));
+
+    setSelectedLetterId(clicked ? clicked.id : null);
+    canvasStageRef.current?.focus();
+  };
+
+  const handleCanvasPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!imageElement || (!isManualMode && event.shiftKey === false)) return;
+    const point = getCanvasPoint(event.clientX, event.clientY);
+    if (!point) return;
+    setDraftBox({
+      startX: point.normalizedX,
+      startY: point.normalizedY,
+      currentX: point.normalizedX,
+      currentY: point.normalizedY,
+    });
+  };
+
+  const handleCanvasPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!draftBox) return;
+    const point = getCanvasPoint(event.clientX, event.clientY);
+    if (!point) return;
+    setDraftBox((prev) =>
+      prev
+        ? { ...prev, currentX: point.normalizedX, currentY: point.normalizedY }
+        : prev,
+    );
+  };
+
+  const handleCanvasPointerUp = () => {
+    if (draftBox) {
+      commitDraftBox(draftBox);
+    }
+  };
+
+  const handleBeginManualMode = () => {
+    setIsManualMode(true);
+    setNotice({
+      tone: 'info',
+      title: 'Manual boxing ready',
+      detail: 'Drag directly on the canvas to create a glyph region. You can also keep using Shift-drag if you prefer.',
+    });
+    canvasStageRef.current?.focus();
+  };
 
   const updateSelectedChar = (char: string) => {
     if (!selectedLetterId) return;
-    setLetters(prev => prev.map(l => l.id === selectedLetterId ? { ...l, char } : l));
+
+    setLetters((prev) => prev.map((letter) => (letter.id === selectedLetterId ? { ...letter, char } : letter)));
+    setNotice({
+      tone: 'info',
+      title: 'Glyph relabeled',
+      detail: char ? `The selected region is now mapped to “${char}”.` : 'Enter a single character to label this region.',
+    });
   };
 
   const deleteSelectedBox = () => {
     if (!selectedLetterId) return;
-    setLetters(prev => prev.filter(l => l.id !== selectedLetterId));
-    setSelectedLetterId(null);
+
+    setLetters((prev) => prev.filter((letter) => letter.id !== selectedLetterId));
+    if (selectedIndex > 0) {
+      selectIndex(selectedIndex - 1);
+    } else {
+      setSelectedLetterId(null);
+    }
+    setNotice({
+      tone: 'info',
+      title: 'Glyph removed',
+      detail: 'The selected region was removed from the export set.',
+    });
+    canvasStageRef.current?.focus();
   };
 
+  const handleCanvasKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (letters.length === 0) return;
+
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        event.preventDefault();
+        selectIndex(selectedIndex >= 0 ? selectedIndex + 1 : 0);
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        event.preventDefault();
+        selectIndex(selectedIndex >= 0 ? selectedIndex - 1 : letters.length - 1);
+        break;
+      case 'Home':
+        event.preventDefault();
+        selectIndex(0);
+        break;
+      case 'End':
+        event.preventDefault();
+        selectIndex(letters.length - 1);
+        break;
+      case 'Backspace':
+      case 'Delete':
+        if (selectedLetterId) {
+          event.preventDefault();
+          deleteSelectedBox();
+        }
+        break;
+      case 'Enter':
+        if (selectedLetterId) {
+          event.preventDefault();
+          glyphInputRef.current?.focus();
+          glyphInputRef.current?.select();
+        }
+        break;
+      case 'Escape':
+        if (draftBox) {
+          event.preventDefault();
+          setDraftBox(null);
+          setNotice({
+            tone: 'info',
+            title: 'Manual box canceled',
+            detail: 'Shift-drag again whenever you want to add another glyph region.',
+          });
+        }
+        break;
+      default:
+        break;
+    }
+  };
+
+  useEffect(() => {
+    const current = glyphInputRef.current;
+    if (!current) return;
+    if (selectedLetterId) {
+      current.dataset.selectedId = selectedLetterId;
+    }
+  }, [selectedLetterId]);
+
   return (
-    <div className="min-h-screen bg-neutral-50 text-neutral-900 font-sans">
-      <header className="bg-white border-b border-neutral-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-2 rounded-lg">
-            <Type className="w-6 h-6 text-white" />
-          </div>
-          <h1 className="text-xl font-semibold tracking-tight">AutoGlyph</h1>
-        </div>
-        <div className="flex items-center gap-4">
-          <a href="https://github.com/opentypejs/opentype.js" target="_blank" rel="noreferrer" className="text-sm text-neutral-500 hover:text-neutral-900">Powered by opentype.js</a>
-        </div>
-      </header>
+    <div className="app-shell">
+      <input
+        ref={fileInputRef}
+        id="image-upload"
+        type="file"
+        accept="image/*"
+        onChange={handleImageUpload}
+        style={{ display: 'none' }}
+      />
 
-      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <TopBar workflowLabel={workflowLabel} />
 
-        {/* Left Column: Image & Canvas */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-medium">1. Upload Alphabet Image</h2>
-              <div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={handleLoadDemo}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    <Type className="w-4 h-4" />
-                    Load Demo
-                  </button>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                    className="hidden"
-                    id="image-upload"
-                  />
-                  <label
-                    htmlFor="image-upload"
-                    className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    <Upload className="w-4 h-4" />
-                    Choose Image
-                  </label>
-                </div>
-              </div>
-            </div>
+      <main className="workspace-grid">
+        <WorkspacePanel
+          imageElement={imageElement}
+          letters={letters}
+          selectedLetter={selectedLetter}
+          isProcessing={isProcessing}
+          canDetect={Boolean(imageFile)}
+          onLoadDemo={handleLoadDemo}
+          onDetect={handleDetect}
+          onBeginManualMode={handleBeginManualMode}
+          onOpenFilePicker={handleOpenFilePicker}
+          canvasRef={canvasRef}
+          onCanvasClick={handleCanvasClick}
+          onCanvasPointerDown={handleCanvasPointerDown}
+          onCanvasPointerMove={handleCanvasPointerMove}
+          onCanvasPointerUp={handleCanvasPointerUp}
+          canvasStageRef={canvasStageRef}
+          onCanvasKeyDown={handleCanvasKeyDown}
+          isCanvasFocused={isCanvasFocused}
+          isManualMode={isManualMode}
+        />
 
-            {imageElement ? (
-              <div className="relative border border-neutral-200 rounded-lg overflow-hidden bg-neutral-100">
-                <ImageCanvas
-                  imageElement={imageElement}
-                  letters={letters}
-                  setLetters={setLetters}
-                  selectedLetterId={selectedLetterId}
-                  setSelectedLetterId={setSelectedLetterId}
-                  snapToGrid={snapToGrid}
-                  gridSize={gridSize}
-                />
-                {letters.length === 0 && !isProcessing && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm">
-                    <button
-                      onClick={handleDetect}
-                      className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium shadow-sm transition-colors flex items-center gap-2"
-                    >
-                      <Type className="w-5 h-5" />
-                      Detect Letters with AI
-                    </button>
-                  </div>
-                )}
-                {isProcessing && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 backdrop-blur-sm gap-4">
-                    <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
-                    <p className="text-sm font-medium text-neutral-600">Analyzing image and finding letters...</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="border-2 border-dashed border-neutral-300 rounded-xl p-12 flex flex-col items-center justify-center text-center bg-neutral-50">
-                <Upload className="w-10 h-10 text-neutral-400 mb-4" />
-                <p className="text-neutral-600 font-medium mb-1">No image selected</p>
-                <p className="text-neutral-500 text-sm">Upload an image containing handwritten or printed letters.</p>
-                <button
-                  type="button"
-                  onClick={handleLoadDemo}
-                  className="mt-5 inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-colors"
-                >
-                  <Type className="w-4 h-4" />
-                  Try the built-in demo
-                </button>
-              </div>
-            )}
+        <aside className="inspector-column">
+          <SelectedGlyphPanel
+            selectedLetter={selectedLetter}
+            selectedIndex={selectedIndex}
+            totalLetters={letters.length}
+            glyphInputRef={glyphInputRef}
+            onCharChange={updateSelectedChar}
+            onDelete={deleteSelectedBox}
+          />
 
-            {imageElement && letters.length > 0 && (
-              <p className="text-xs text-neutral-500 mt-3 flex items-center gap-1">
-                <Settings className="w-3 h-3" />
-                Click on a bounding box to edit its character or delete it.
-              </p>
-            )}
-          </div>
+          <FontSettingsPanel
+            fontName={fontName}
+            isDarkText={isDarkText}
+            letterCount={letters.length}
+            hasDetectedGlyphs={hasDetectedGlyphs}
+            onFontNameChange={setFontName}
+            onDarkTextChange={setIsDarkText}
+            onGenerate={handleGenerate}
+            formatGlyphCount={formatGlyphCount}
+          />
 
-          {/* Real-time Preview */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-            <h2 className="text-lg font-medium mb-4">Real-time Preview</h2>
-            <input
-              type="text"
-              value={previewText}
-              onChange={(e) => setPreviewText(e.target.value)}
-              className="w-full border border-neutral-300 rounded-lg px-3 py-2 mb-4 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-              placeholder="Type to preview..."
-            />
-            <div className="border border-neutral-200 rounded-lg p-4 bg-neutral-50 overflow-x-auto min-h-[120px] flex items-center">
-              {previewSvg ? (
-                <div dangerouslySetInnerHTML={{ __html: previewSvg }} className="text-neutral-900" />
-              ) : (
-                <p className="text-sm text-neutral-400 text-center w-full">
-                  {letters.length > 0 ? (previewText ? 'Generating preview...' : 'Type text to preview') : 'Detect letters to see preview'}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column: Settings & Export */}
-        <div className="space-y-6">
-
-          {/* Edit Selected Letter */}
-          {selectedLetterId && (
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-indigo-200 ring-1 ring-indigo-50">
-              <h3 className="text-sm font-medium text-indigo-900 mb-3 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-red-500" />
-                Edit Selected Box
-              </h3>
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  maxLength={1}
-                  value={letters.find(l => l.id === selectedLetterId)?.char || ''}
-                  onChange={(e) => updateSelectedChar(e.target.value)}
-                  className="flex-1 border border-neutral-300 rounded-lg px-3 py-2 text-center text-lg font-medium focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                  placeholder="Char"
-                />
-                <button
-                  onClick={deleteSelectedBox}
-                  className="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg font-medium transition-colors flex items-center justify-center"
-                  title="Delete Box"
-                >
-                  <Trash2 className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Canvas Settings */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-            <h2 className="text-lg font-medium mb-4">Canvas Settings</h2>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between p-3 bg-neutral-50 rounded-lg border border-neutral-200">
-                <div>
-                  <p className="text-sm font-medium text-neutral-900">Snap to Grid</p>
-                  <p className="text-xs text-neutral-500">Align boxes precisely</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={snapToGrid}
-                    onChange={(e) => setSnapToGrid(e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                </label>
-              </div>
-
-              {snapToGrid && (
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 mb-1">Grid Size (px)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={gridSize}
-                    onChange={(e) => setGridSize(Math.max(1, parseInt(e.target.value) || 10))}
-                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-            <h2 className="text-lg font-medium mb-4">2. Font Settings</h2>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 mb-1">Font Name</label>
-                <input
-                  type="text"
-                  value={fontName}
-                  onChange={(e) => setFontName(e.target.value)}
-                  className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                />
-              </div>
-
-              <div className="flex items-center justify-between p-3 bg-neutral-50 rounded-lg border border-neutral-200">
-                <div>
-                  <p className="text-sm font-medium text-neutral-900">Dark Text</p>
-                  <p className="text-xs text-neutral-500">Image has dark ink on light background</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isDarkText}
-                    onChange={(e) => setIsDarkText(e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-neutral-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                </label>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 mb-1">Ascender</label>
-                  <input
-                    type="number"
-                    value={metrics.ascender}
-                    onChange={(e) => setMetrics({ ...metrics, ascender: parseInt(e.target.value) || 0 })}
-                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 mb-1">Descender</label>
-                  <input
-                    type="number"
-                    value={metrics.descender}
-                    onChange={(e) => setMetrics({ ...metrics, descender: parseInt(e.target.value) || 0 })}
-                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 mb-1">Cap Height</label>
-                  <input
-                    type="number"
-                    value={metrics.capHeight}
-                    onChange={(e) => setMetrics({ ...metrics, capHeight: parseInt(e.target.value) || 0 })}
-                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-neutral-700 mb-1">x-Height</label>
-                  <input
-                    type="number"
-                    value={metrics.xHeight}
-                    onChange={(e) => setMetrics({ ...metrics, xHeight: parseInt(e.target.value) || 0 })}
-                    className="w-full border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-4 border-t border-neutral-100">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-neutral-700">Detected Letters</span>
-                  <span className="text-xs font-semibold bg-neutral-100 text-neutral-600 px-2 py-1 rounded-full">
-                    {letters.length}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto p-2 bg-neutral-50 rounded-lg border border-neutral-200">
-                  {letters.length > 0 ? (
-                    letters.map(l => (
-                      <button
-                        key={l.id}
-                        onClick={() => setSelectedLetterId(l.id)}
-                        className={`w-8 h-8 flex items-center justify-center rounded text-sm font-medium transition-colors ${
-                          selectedLetterId === l.id
-                            ? 'bg-red-100 text-red-700 border border-red-200'
-                            : 'bg-white text-neutral-700 border border-neutral-200 hover:border-indigo-300 hover:text-indigo-600'
-                        }`}
-                      >
-                        {l.char}
-                      </button>
-                    ))
-                  ) : (
-                    <p className="text-xs text-neutral-400 w-full text-center py-2">No letters detected yet</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-medium">3. Kerning Pairs</h2>
-              <button
-                onClick={handleSuggestKerning}
-                disabled={letters.length === 0 || isSuggestingKerning}
-                className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-              >
-                {isSuggestingKerning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Settings className="w-4 h-4" />}
-                Auto-Suggest
-              </button>
-            </div>
-
-            {kerningPairs.length > 0 ? (
-              <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
-                {kerningPairs.map((pair, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <div className="flex-1 flex items-center justify-center gap-1 bg-neutral-100 rounded-lg py-1">
-                      <span className="font-medium text-lg">{pair.left}</span>
-                      <span className="text-neutral-400">-</span>
-                      <span className="font-medium text-lg">{pair.right}</span>
-                    </div>
-                    <input
-                      type="number"
-                      value={pair.value}
-                      onChange={(e) => {
-                        const newPairs = [...kerningPairs];
-                        newPairs[idx].value = parseInt(e.target.value) || 0;
-                        setKerningPairs(newPairs);
-                      }}
-                      className="w-20 border border-neutral-300 rounded-lg px-2 py-1.5 text-sm text-center focus:ring-2 focus:ring-indigo-500 outline-none"
-                    />
-                    <button
-                      onClick={() => setKerningPairs(kerningPairs.filter((_, i) => i !== idx))}
-                      className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-neutral-500 text-center py-4">
-                No kerning pairs defined. Click Auto-Suggest to use AI to find problematic pairs.
-              </p>
-            )}
-
-            <button
-              onClick={() => setKerningPairs([...kerningPairs, { left: 'A', right: 'V', value: -50 }])}
-              className="mt-4 w-full py-2 border border-dashed border-neutral-300 text-neutral-600 hover:bg-neutral-50 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Add Manual Pair
-            </button>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-            <h2 className="text-lg font-medium mb-4">4. Export</h2>
-            <div className="space-y-3">
-              <button
-                onClick={() => handleDownload('otf')}
-                disabled={letters.length === 0}
-                className="w-full py-3 bg-black hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed text-white rounded-xl font-medium shadow-sm transition-colors flex items-center justify-center gap-2"
-              >
-                <Download className="w-5 h-5" />
-                Download .otf
-              </button>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => handleDownload('ttf')}
-                  disabled={letters.length === 0}
-                  className="w-full py-2 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-50 disabled:text-neutral-400 disabled:cursor-not-allowed text-neutral-800 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 text-sm"
-                >
-                  <Download className="w-4 h-4" />
-                  .ttf
-                </button>
-                <button
-                  onClick={() => handleDownload('woff')}
-                  disabled={letters.length === 0}
-                  className="w-full py-2 bg-neutral-100 hover:bg-neutral-200 disabled:bg-neutral-50 disabled:text-neutral-400 disabled:cursor-not-allowed text-neutral-800 rounded-xl font-medium transition-colors flex items-center justify-center gap-2 text-sm"
-                >
-                  <Download className="w-4 h-4" />
-                  .woff
-                </button>
-              </div>
-            </div>
-            <p className="text-xs text-neutral-500 text-center mt-4">
-              Generates font files with embedded kerning tables for maximum compatibility.
-            </p>
-          </div>
-
-        </div>
+          <StatusPanel notice={notice} />
+          <ProcessGuide />
+        </aside>
       </main>
+
+      <CanvasFocusSync targetRef={canvasStageRef} onFocusChange={setIsCanvasFocused} />
     </div>
   );
+}
+
+function CanvasFocusSync({
+  targetRef,
+  onFocusChange,
+}: {
+  targetRef: React.RefObject<HTMLDivElement | null>;
+  onFocusChange: (focused: boolean) => void;
+}) {
+  useEffect(() => {
+    const target = targetRef.current;
+    if (!target) return;
+
+    const handleFocus = () => onFocusChange(true);
+    const handleBlur = () => onFocusChange(false);
+
+    target.addEventListener('focus', handleFocus);
+    target.addEventListener('blur', handleBlur);
+
+    return () => {
+      target.removeEventListener('focus', handleFocus);
+      target.removeEventListener('blur', handleBlur);
+    };
+  }, [onFocusChange, targetRef]);
+
+  return null;
 }
