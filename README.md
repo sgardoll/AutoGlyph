@@ -77,8 +77,17 @@ npm install
 
 ### 2. Run locally
 
+Open two separate terminals in the repository root and keep both processes running.
+
+In the first terminal, start the server:
+
 ```bash
 npm run server
+```
+
+In the second terminal, start the frontend:
+
+```bash
 npm run dev
 ```
 
